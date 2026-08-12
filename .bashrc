@@ -7,3 +7,5 @@ else
     printf 'WARNING: template shell loader is missing; helpers were not loaded.\n' >&2
 fi
 unset TEMPLATE_DAILY_ROOT
+
+export SIF_PATH="./env.sif"
