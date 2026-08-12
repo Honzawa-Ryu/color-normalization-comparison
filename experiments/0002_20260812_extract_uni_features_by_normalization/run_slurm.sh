@@ -1,0 +1,95 @@
+#!/bin/bash
+#SBATCH --job-name=0002_20260812_extract_uni_features_by_normalization
+#SBATCH --partition=x-large-andre01
+#SBATCH --output=/workspace/andre01/honzawa/02-playground/color-normalization-comparison/logs/0002_20260812_extract_uni_features_by_normalization/%A_%a_0002_20260812_extract_uni_features_by_normalization.out
+#SBATCH --error=/workspace/andre01/honzawa/02-playground/color-normalization-comparison/logs/0002_20260812_extract_uni_features_by_normalization/%A_%a_0002_20260812_extract_uni_features_by_normalization.out
+#SBATCH --array=0-3
+#SBATCH --signal=B:USR1@288
+#SBATCH --export=ALL
+#SBATCH --nodes=1
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=16
+#SBATCH --mem=64g
+#SBATCH --time=8:00:00
+# ⚠️ macenko/reinhard/vahadaneの3タスクは998スライドx 500パッチ/スライドの
+#    実測所要時間が未検証の初期見積り(macenko/vahadaneはパッチごとのstain matrix推定が
+#    CPU律速になりうる)。noneタスクは既存features_uni_v1(config.yml参照)を座標lookup
+#    で再利用するだけなのでGPU推論は走らず、この見積りより大幅に速く終わる想定
+#    (ただしarrayの他タスクと同じ--gres=gpu:1を予約したまま実行される)。
+#    初回投入後、実際のスループットを見て --time を調整すること（EXPERIMENT_NOTES.md参照）。
+
+# 他の実験のジョブに依存させたい場合、有効化してjob_idを埋める
+# （job_idは outputs/{依存先exp}/latest_job_id.txt を参照。投入のたびに
+#  変わりうる値なので、都度手動で書き換えること）:
+# #SBATCH --dependency=afterok:<job_id>
+
+# ⚠️ 注意: リソース(--gres/--cpus-per-task/--mem/--time)を変更したら、
+#          --partition と --signal のマージンも合わせて手動で見直すこと
+#          （make create_exp 実行時に一度だけ計算されたもので、自動追従しない）。
+# ⚠️ 注意: シェル上での for/while ループによる複数組み合わせ実行は推奨しない。
+#          下記の Array run / Seq run の使用を推奨。
+
+export PROJECT_ROOT="/workspace/andre01/honzawa/02-playground/color-normalization-comparison"
+export EXP_NAME="0002_20260812_extract_uni_features_by_normalization"
+
+# =====================================================
+# Storage
+# /workspace はNFS（遅い）、/scratch はノード付属のm.2 SSD（速い・ジョブ終了時に
+# 自動削除）。デフォルトで有効。NFS越しに直接読み書きしたい場合のみ0にする
+# （例: 出力を実行中にリアルタイムで/workspace側から監視したい等）。
+# =====================================================
+
+# 0001と同じ理由(data/raw_slideの丸ごとrsyncが無駄、書き込み先はdata/trident_processed
+# という永続共有キャッシュ)で両方無効化し、NFS(/workspace)に直接読み書きする。
+USE_LOCAL_SSD_INPUT=0
+USE_LOCAL_SSD_OUTPUT=0
+
+# =====================================================
+# python path
+# =====================================================
+
+PYTHON_PATH="${PROJECT_ROOT}/experiments/${EXP_NAME}/experiment.py"
+
+# =====================================================
+# Single run
+# =====================================================
+
+# RUN_MODE="single"
+# RUN_COMMAND="python ${PYTHON_PATH} --config config.yml"
+
+# =====================================================
+# Array run: 染色正規化手法(none/macenko/reinhard/vahadane)を4タスクに展開する。
+# GRID_ARGS[i] と GRID_VALUES[i] が対応し、直積が CONFIGS として展開される
+# (このexperimentは次元が1つだけなので直積は4通りそのまま)。
+# =====================================================
+
+RUN_MODE="array"
+BASE_COMMAND="python ${PYTHON_PATH} --config config.yml"
+GRID_ARGS=(
+    "--method"
+)
+GRID_VALUES=(
+    "none macenko reinhard vahadane"
+)
+
+# =====================================================
+# Seq run にしたい場合（1ジョブ内でGRIDを順次実行）
+#
+# 上と同様に RUN_MODE="seq" にし、BASE_COMMAND/GRID_ARGS/GRID_VALUES を設定する。
+# こちらは #SBATCH --array は不要（1ジョブでループするため）。
+# =====================================================
+
+# RUN_MODE="seq"
+# BASE_COMMAND="python ${PYTHON_PATH}"
+# GRID_ARGS=(
+#     "--model"
+# )
+# GRID_VALUES=(
+#     "bert roberta"
+# )
+
+# =====================================================
+# Entry point
+# =====================================================
+
+source "${PROJECT_ROOT}/scripts/slurm_entry.sh"

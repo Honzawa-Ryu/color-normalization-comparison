@@ -1,0 +1,28 @@
+# ============================================================
+# Experiment Configuration
+# ============================================================
+# 0002_extract_uni_features_by_normalization: 0001が作った共有パッチ座標
+# (data/trident_processed/{mag}x_{patch_size}px_{overlap}px_overlap_sub{N}/) に対し、
+# 染色正規化手法(none/macenko/reinhard/vahadane)ごとにUNI(uni_v1)特徴量を抽出する。
+# 手法は run_slurm.sh の GRID_ARGS/GRID_VALUES で振る変動次元 (--method) なので、
+# ここには置かない(config.ymlは固定パラメータのみ)。
+#
+# mag/patch_size/overlap/n_patches_per_slide は 0001 の config.yml と必ず一致させること
+# (座標サブディレクトリ名の導出に使うため、ずれると 0001 が作った座標を見つけられない)。
+#
+# method=none のタスクは、data/trident_processed/{mag}x_{patch_size}px_{overlap}px_overlap/
+# 直下に既存の features_uni_v1/ (無正規化のUNI特徴量、全パッチ) があれば、UNI推論を
+# 走らせずそこから座標一致lookupで再利用する(lib/trident_pipeline.
+# extract_features_by_coords_lookup)。無ければ通常通りUNI推論する(フォールバック)。
+# ============================================================
+
+seed: 42
+
+mag: 20
+patch_size: 224
+overlap: 0
+n_patches_per_slide: 500
+
+# --- UNI feature extraction ---
+batch_limit: 256
+max_workers: 8

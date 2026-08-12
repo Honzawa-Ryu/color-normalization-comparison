@@ -1,0 +1,32 @@
+# ============================================================
+# Experiment Configuration
+# ============================================================
+# 0003_compare_stain_normalization_batch_effect: 0002が手法ごとに抽出したUNI特徴量
+# (none/macenko/reinhard/vahadane) に対し、η-squaredで「施設間差」(EXP_ID)・
+# 「スライド間差」(slide_id)をどれだけ説明してしまうかを比較する。値が低いほど、
+# その正規化手法がバッチ効果を良く除去できていることを意味する。
+#
+# mag/patch_size/overlap/n_patches_per_slide は 0001/0002 の config.yml と
+# 必ず一致させること(特徴量ディレクトリの場所を導出するため)。
+# ============================================================
+
+seed: 42
+
+mag: 20
+patch_size: 224
+overlap: 0
+n_patches_per_slide: 500
+
+# Open TG-GATEsには本当の意味での「施設(病院)」列が無いため、EXP_ID(化合物投与実験の
+# バッチID)を「施設間差」相当のグループラベルとして使う(lib/data_process/labels.py参照)。
+pathological_image_csv: raw_table/open_tggates_pathological_image.csv
+
+# --- KNN cross-check (eta-squaredを補強する副次指標。重ければ false で無効化可) ---
+compute_knn: true
+knn_n_neighbors: 15
+knn_n_splits: 5
+# グループ(スライド/EXP_ID)あたり最大何パッチを評価に使うか。KNNのCVコストは
+# サンプル数に対して重く増えるため、全パッチ(約50万/手法)をそのまま使うのは避け、
+# グループごとに一定数へ均等にサブサンプルする(全体をランダムに間引くと、
+# パッチ数の少ないグループがStratifiedKFoldの分割数を下回る恐れがあるため)。
+knn_max_per_group: 20

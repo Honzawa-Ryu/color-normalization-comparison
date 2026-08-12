@@ -1,0 +1,41 @@
+# ============================================================
+# Experiment Configuration
+# ============================================================
+# 0001_extract_tissue_coords: TRIDENTでdata/raw_slideの全WSIを組織セグメンテーション
+# し、パッチ座標(coords h5)を抽出する。正規化手法(none/macenko/reinhard/vahadane)に
+# よらず全員が共有する、色に依存しない前処理フェーズ(1実験=1フェーズ原則)。
+# 続けて、0002以降が使うN枚/スライドのサブサンプル座標も同じseedで作成し、
+# 4つの正規化バリアントが常に同一のパッチ集合を比較できるようにする。
+#
+# data/trident_processed/ には、既に同じ998スライドに対して20x_224px_0px_overlapで
+# セグメンテーション+座標+features_uni_v1(無正規化のUNI特徴量)一式が投入済み
+# (元は別プロジェクトで抽出したものをこのプロジェクトへ複製)。TRIDENTは
+# 「同名の出力(contours/*.jpg, patches/<slide>_patches.h5)が既にあればそのスライドは
+# スキップする」設計のため、mag/patch_size/overlapをこの既存出力と一致させておけば、
+# 998枚分のセグメンテーション・座標抽出をほぼゼロコストで再利用できる
+# (実際に計算し直すのは、まだ無い分だけ)。そのため patch_size は TRIDENTの表が挙げる
+# 256ではなく、既存資産に合わせて224にしている(UNIのネイティブ入力解像度も224であり、
+# 256にしてResizeで224へ落とすより、224px@20xをそのまま使う方がむしろ素直な選択)。
+# 0002は"none"手法についてもこの既存features_uni_v1を(GPU推論なしの座標一致lookupで)
+# 再利用する(lib/trident_pipeline.extract_features_by_coords_lookup)。
+# ============================================================
+
+seed: 42
+
+# --- TRIDENT segmentation + coords ---
+# patch_size/mag は uni_v1 (0002で使うUNIパッチエンコーダ) の解像度。変更する場合は
+# 0002/0003のconfig.ymlも合わせて揃えること(既存資産の再利用条件でもある)。
+mag: 20
+patch_size: 224
+overlap: 0
+# 998スライド全てのセグメンテーション・座標は既に存在しスキップされる前提なので、
+# 実質的にはこのジョブで新規に動くことはない想定。それでもTRIDENTはsegmentation_model
+# のインスタンス自体は(使わなくても)構築するため、GPU/HFアクセス不要なotsuにしておく。
+segmenter: otsu
+seg_conf_thresh: 0.5
+min_tissue_proportion: 0.0
+max_workers: 8
+
+# --- patch subsampling (shared by all 4 normalization variants in 0002) ---
+n_patches_per_slide: 500
+subsample_seed: 42

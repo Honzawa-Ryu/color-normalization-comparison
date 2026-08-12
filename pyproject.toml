@@ -53,6 +53,14 @@ dependencies = [
     "sentencepiece",
     "vllm>=0.22.0",
     "matplotlib-venn>=1.1.2",
+
+    # WSI processing (color-normalization-comparison)
+    "trident",
+    "h5py",
+    "openslide-python",
+    "timm==0.9.16",
+    "opencv-python-headless",
+    "scikit-image",
 ]
 
 
@@ -75,3 +83,7 @@ explicit = true
 torch = { index = "pytorch-cu130" }
 torchvision = { index = "pytorch-cu130" }
 torchaudio = { index = "pytorch-cu130" }
+# TRIDENTはPyPIには無いため、GitHubから直接インストールする(Submodule化は不要)。
+# revは00-utils/wsi_preprocessで動作確認済みのコミットに固定している
+# (Processorのメソッドシグネチャ等をこの時点のソースで確認済み)。
+trident = { git = "https://github.com/mahmoodlab/TRIDENT.git", rev = "457756c82946167f3400ce614f3141504f9318d9" }
