@@ -6,15 +6,17 @@ review-expで結果を集約する際、debug-experimentで調査する際は、
 
 ## 全体構成
 
-3実験で1本のパイプラインを構成する(1実験=1フェーズ原則)。0002以降は必ず0001の
-完了後に、0003は0002の4手法すべて完了後に実行すること。
+4実験で1本のパイプラインを構成する(1実験=1フェーズ原則)。0002以降は必ず0001の
+完了後に、0003/0004は0002の4手法すべて完了後に実行すること(0003と0004はどちらも
+0002の出力だけを読むので、互いの前後関係は無い)。
 
 ```
 0001 extract_tissue_coords                  (TRIDENT seg+coords、正規化非依存、単発)
         ↓ data/trident_processed/{coords_dir}_sub{N}/patches/*.h5
 0002 extract_uni_features_by_normalization  (UNI特徴量抽出、array 4タスク: none/macenko/reinhard/vahadane)
         ↓ data/trident_processed/{coords_dir}_sub{N}/features_uni_v1_{method}/*.h5
-0003 compare_stain_normalization_batch_effect (eta-squared比較、単発)
+        ├─ 0003 compare_stain_normalization_batch_effect     (eta-squared/KNNでバッチ効果を比較、単発)
+        └─ 0004 evaluate_finding_utility_and_visualize        (has_finding AUROC + t-SNE可視化、単発)
 ```
 
 `data/trident_processed/` はTRIDENTの共有ジョブディレクトリで、`outputs/`ではなく
@@ -108,10 +110,64 @@ EXP_ID(化合物投与実験のバッチID、998スライド中261種)をユー�
   (既定20/グループ)でグループ単位に均等サブサンプルしてから評価している
   (グローバルにランダム間引きすると、パッチ数の少ないグループが
   StratifiedKFoldの分割数を下回りクラッシュしうるため、グループ単位の
-  キャップにしている — `experiment.py`の`_stratified_subsample`)。
+  キャップにしている — `lib/validate/batch_effect.stratified_subsample_indices`)。
   重い場合は`config.yml`の`compute_knn: false`で無効化できる。
 - 出力: `comparison_table.csv`(手法×指標の一覧)、
   `eta_squared_comparison.png`(eta_sq_meanの棒グラフ)、`results.json`(全詳細)。
+- **結果(2026-08-13実行、job 8456)**: eta_sq_mean(exp_id/slide)・KNN精度とも
+  macenkoが4手法中最も低い(=バッチ効果が最も小さい)。reinhardはnoneより悪化。
+  KNN精度の方が手法間の差がはっきり出る(none: slide 0.51/exp_id 0.50 →
+  macenko: slide 0.28/exp_id 0.26)。ただし点推定のみで信頼区間は未算出、
+  かつ生物学的シグナルを保持できているかは未検証だったため、0004を追加した。
+
+## 0004_20260813_evaluate_finding_utility_and_visualize
+
+ユーザーからのフィードバック(2026-08-13): eta-squared/KNNだけでは「バッチ情報が
+消えた」のか「情報ごと潰れた」のか区別できない、という指摘を受けて追加。
+
+- **has_finding利用性プローブ**: `lib/data_process/labels.load_finding_labels`
+  (concept-erasing-toxpathoから移植、`open_tggates_pathology.csv`との突合)で
+  病理所見の有無を取得し、パッチ特徴量をスライド単位で平均プーリング
+  (`lib/trident_pipeline.pool_slide_mean_features`)した上で
+  `lib/validate/batch_effect.compute_logreg_probe`(L2ロジスティック回帰、
+  balanced_accuracy/ROC-AUC)で4手法を比較する。998スライド中has_finding=True 193/
+  False 805(comparison-ad-toxpathoの既知の内訳と一致確認済み)。
+- **t-SNE可視化**: 4手法とも同一の座標を共有している性質を利用し、最初に読み込んだ
+  手法のslide_idsから`stratified_subsample_indices`で選んだ行インデックス
+  (既定: スライドあたり8パッチ、998スライド分で約8000点)を4手法すべてに使い回し、
+  同じパッチ集合でt-SNE 2次元embeddingを計算・比較する。スライドIDで色分け
+  (`tab20`カラーマップを20周期で使い回す設計、998スライド分の凡例は出さない —
+  「どの色が何スライドか」ではなく「塊が残っているか混ざっているか」という
+  見た目のパターンを見るためのもの)。出力は`tsne_by_slide.png`(2x2グリッド、
+  1手法1パネル)と`tsne_embeddings.npz`(埋め込み生データ、再プロット用)。
+- CPUのみ(GPU不要)。`--time=1:00:00`はt-SNE(約8000点×1024次元、4手法分)の
+  実測に基づかない初期見積り。
+
+## 既知の問題(2026-08-13発生、対応済み)
+
+0002(job 8427, SIF_PATH未export状態でagentが手動`sbatch`)・0003(job 8456)の
+`logs/.../run_metadata.yaml`は`status: FAILED`(`fail_reason`に
+`NONZERO_EXIT_⚠️ Apptainer not found or SIF_PATH not set...`)と記録されているが、
+**実際には両方とも正常に完了しており(各`outputs/.../completion.json`のstatusは
+"completed"、0003の`comparison_table.csv`も正しい値)、FAILED表示は誤り**。
+
+原因は2つの重なり:
+1. agentが`runx`ではなく手動`sbatch`で投入した際に`SIF_PATH`をexportし忘れた
+   ([[template-daily-experiments-sif-path]]と同じ罠)。これ自体は
+   `scripts/slurm_entry.sh`側で非fatalにhost実行へフォールバックするだけで、
+   計算自体は成功する(実際にvahadaneのUNI推論も正しく完走している)。
+2. **`scripts/slurm_entry.sh`の`_run_single()`のバグ**: SIF_PATH未設定時の警告
+   `echo "⚠️ Apptainer not found..."`が標準エラーではなく標準出力に出ていたため、
+   `EXIT_CODE=$(_run_single ...)`のコマンド置換がこの警告文と本来の終了コード(0)を
+   まとめて`EXIT_CODE`変数に取り込んでしまい、`_handle_final_state`の
+   `[ "${exit_code}" -eq 0 ]`が非数値比較で失敗して`FAILED`扱いになっていた。
+   `>&2`を付けて標準エラーに逃がすよう修正済み(以後の投入では正しく`COMPLETED`と
+   記録される)。
+
+**教訓**: `runx`を使わず手動で`sbatch`する場合は`export SIF_PATH="./env.sif"`を
+忘れないこと。ステータス確認は`run_metadata.yaml`の`status`だけでなく、
+`outputs/.../completion.json`の`status`(実験スクリプト自身が書く、より信頼できる
+記録)も合わせて見ること。
 
 ## 依存関係まわりの補足
 

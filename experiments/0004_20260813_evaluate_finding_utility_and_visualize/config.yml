@@ -1,0 +1,40 @@
+# ============================================================
+# Experiment Configuration
+# ============================================================
+# 0004_evaluate_finding_utility_and_visualize: 0003のeta-squared/KNN比較(=バッチ情報を
+# 消せているか)だけでは「バッチ情報が消えた」のか「情報ごと潰れた」のか区別できないため、
+# 2方向を追加する。
+#
+# 1. タスク有用性チェック: has_finding(病理所見の有無、スライド単位ラベル)に対する
+#    ロジスティック回帰プローブのAUROC/balanced accuracyを4手法で比較する
+#    (パッチ特徴量をスライド単位で平均プーリングしてから評価)。正規化がバッチ効果を
+#    消しつつ、この生物学的シグナルまで壊していないか(理想は同等以上)を見る。
+# 2. 可視化: 4手法それぞれのパッチ特徴量をt-SNEで2次元に落とし、スライドIDで
+#    色分けした散布図を作る。正規化でスライドごとの塊がどれだけ混ざり合うかを
+#    視覚的に確認する(998スライド分の色を凡例で判別することは意図しておらず、
+#    「塊が残っているか、混ざっているか」という見た目のパターンを見るためのもの)。
+#
+# mag/patch_size/overlap/n_patches_per_slide は 0001/0002/0003 の config.yml と
+# 必ず一致させること(特徴量ディレクトリの場所を導出するため)。
+# ============================================================
+
+seed: 42
+
+mag: 20
+patch_size: 224
+overlap: 0
+n_patches_per_slide: 500
+
+pathological_image_csv: raw_table/open_tggates_pathological_image.csv
+pathology_csv: raw_table/open_tggates_pathology.csv
+
+# --- has_finding utility probe (slide-mean pooled features) ---
+logreg_n_splits: 5
+
+# --- t-SNE visualization ---
+# スライドあたりの可視化用サブサンプル数。998スライド x これ の点数でt-SNEを走らせる
+# (4手法は同一の座標を共有しているため、同じ行インデックスを4手法に使い回して
+# 見た目を公平に比較できる)。
+n_viz_patches_per_slide: 8
+viz_seed: 42
+tsne_perplexity: 30

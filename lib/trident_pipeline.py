@@ -234,3 +234,23 @@ def load_patch_features(features_dir: Union[str, Path]):
     X = np.concatenate(X_parts, axis=0)
     slide_ids = np.concatenate(slide_id_parts, axis=0)
     return X, slide_ids
+
+
+def pool_slide_mean_features(X: np.ndarray, slide_ids: np.ndarray):
+    """Mean-pool patch-level features to one vector per slide.
+
+    Used for slide-level labels (e.g. has_finding) that don't have a per-patch
+    ground truth -- matches the "slide-mean UNI features" pooling convention used
+    elsewhere in this project family (e.g. comparison-ad-toxpatho's finding-utility
+    checks) rather than a patch-level probe.
+
+    Returns
+    -------
+    X_mean : np.ndarray, shape (n_slides, dim)
+    unique_slide_ids : np.ndarray, shape (n_slides,)
+        Sorted unique slide ids; `X_mean[i]` is the mean of all patches whose
+        `slide_ids` equals `unique_slide_ids[i]`.
+    """
+    unique_slide_ids = np.unique(slide_ids)
+    X_mean = np.stack([X[slide_ids == sid].mean(axis=0) for sid in unique_slide_ids])
+    return X_mean, unique_slide_ids

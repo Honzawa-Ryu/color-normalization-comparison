@@ -1,6 +1,7 @@
 from typing import Dict
 
 import numpy as np
+from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.neighbors import KNeighborsClassifier
 
@@ -95,3 +96,68 @@ def compute_knn_accuracy(
     scores = cross_val_score(knn, X, y, cv=skf, scoring="accuracy", n_jobs=-1)
 
     return float(np.mean(scores))
+
+
+def compute_logreg_probe(
+    X: np.ndarray,
+    y: np.ndarray,
+    n_splits: int = 5,
+    random_state: int = 42,
+) -> Dict[str, float]:
+    """
+    L2正則化ロジスティック回帰による二値分類プローブ(concept-erasing-toxpathoの
+    同名関数を移植)。
+
+    サンプル数が次元数より少ない(例: パッチをスライド単位で平均プーリングした特徴量は
+    サンプル数=スライド数と少なくなりがち)ような高次元・少サンプルの状況でも、
+    正則化された線形モデルは安定して線形の手がかりを検出できる。クラス不均衡を
+    考慮してclass_weight="balanced"を使い、balanced_accuracyとROC-AUCの両方を返す。
+
+    Parameters
+    ----------
+    X : np.ndarray
+        潜在表現のデータ（各次元の特徴量を含む）。
+    y : np.ndarray
+        二値ラベル（例: 病理所見の有無）。
+    n_splits : int, optional
+        クロスバリデーションの分割数（デフォルトは5）。
+    random_state : int, optional
+        乱数シード（デフォルトは42）。
+
+    Returns
+    -------
+    Dict[str, float]
+        "balanced_accuracy": 平均balanced accuracy。
+        "roc_auc": 平均ROC-AUC。
+    """
+    clf = LogisticRegression(max_iter=2000, class_weight="balanced")
+    skf = StratifiedKFold(n_splits=n_splits, shuffle=True, random_state=random_state)
+
+    balanced_acc = cross_val_score(clf, X, y, cv=skf, scoring="balanced_accuracy", n_jobs=-1)
+    roc_auc = cross_val_score(clf, X, y, cv=skf, scoring="roc_auc", n_jobs=-1)
+
+    return {
+        "balanced_accuracy": float(np.mean(balanced_acc)),
+        "roc_auc": float(np.mean(roc_auc)),
+    }
+
+
+def stratified_subsample_indices(labels: np.ndarray, max_per_group: int, seed: int) -> np.ndarray:
+    """Indices capping each unique value in `labels` to at most `max_per_group` rows.
+
+    Plain global random subsampling would let small groups fall under a downstream
+    fold count (StratifiedKFold) or visual sample size by chance; capping per-group
+    instead guarantees every group keeps min(group_size, max_per_group) samples.
+    Used both to bound KNN CV cost (compute_knn_accuracy) and to pick a legible,
+    evenly-represented subsample for scatter-plot visualizations.
+    """
+    rng = np.random.default_rng(seed)
+    keep = []
+    for label in np.unique(labels):
+        idx = np.flatnonzero(labels == label)
+        if len(idx) > max_per_group:
+            idx = rng.choice(idx, size=max_per_group, replace=False)
+        keep.append(idx)
+    idx = np.concatenate(keep)
+    idx.sort()
+    return idx

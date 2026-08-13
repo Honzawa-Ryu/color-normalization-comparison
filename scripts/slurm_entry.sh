@@ -601,7 +601,7 @@ _run_single() {
                 ${cmd}
             " 1>&2 &
     else
-        echo "⚠️ Apptainer not found or SIF_PATH not set. Running command on host system."
+        echo "⚠️ Apptainer not found or SIF_PATH not set. Running command on host system." >&2
         bash -c "
             set -euo pipefail
             if [ -f ${PROJECT_ROOT}/.venv/bin/activate ]; then

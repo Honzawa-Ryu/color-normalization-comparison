@@ -56,10 +56,10 @@ def main() -> None:
     project_root = _get_project_root()
     sys.path.insert(0, str(project_root))
 
-    from lib.data_process.labels import load_batch_labels
+    from lib.data_process.labels import load_finding_labels
     from lib.output_utils import complete_run, get_run_dir, write_run_metadata
-    from lib.trident_pipeline import coords_subdir_name, load_patch_features
-    from lib.validate.batch_effect import compute_eta_squared, compute_knn_accuracy, stratified_subsample_indices
+    from lib.trident_pipeline import coords_subdir_name, load_patch_features, pool_slide_mean_features
+    from lib.validate.batch_effect import compute_logreg_probe, stratified_subsample_indices
 
     exp_name = os.environ["EXP_NAME"]
     dataset_dir = Path(os.environ.get("DATASET_DIR", str(project_root / "data")))
@@ -78,10 +78,11 @@ def main() -> None:
     overlap = config["overlap"]
     n_patches_per_slide = config["n_patches_per_slide"]
     pathological_image_csv = config["pathological_image_csv"]
-    compute_knn = config["compute_knn"]
-    knn_n_neighbors = config["knn_n_neighbors"]
-    knn_n_splits = config["knn_n_splits"]
-    knn_max_per_group = config["knn_max_per_group"]
+    pathology_csv = config["pathology_csv"]
+    logreg_n_splits = config["logreg_n_splits"]
+    n_viz_patches_per_slide = config["n_viz_patches_per_slide"]
+    viz_seed = config["viz_seed"]
+    tsne_perplexity = config["tsne_perplexity"]
 
     write_run_metadata(run_dir, exp_name=exp_name, variant_key=variant_key)
 
@@ -104,87 +105,100 @@ def main() -> None:
     logger.info(f"run_dir:  {run_dir}")
     logger.info(f"job_dir:  {job_dir}")
 
-    batch_labels = load_batch_labels(dataset_dir / pathological_image_csv)
+    finding_labels = load_finding_labels(
+        dataset_dir / pathological_image_csv, dataset_dir / pathology_csv
+    )
+
+    # ── Shared visualization subsample: same row indices reused across all four
+    # methods (they share identical coordinates by construction -- see 0002 --
+    # so index i always refers to the same (slide, patch-location) in every method's
+    # feature array), for an apples-to-apples "does the same patch set look more
+    # mixed" comparison.
+    viz_idx = None
+    viz_slide_ids = None
 
     results = {}
+    tsne_embeddings = {}
     for method in METHODS:
         features_dir = job_dir / sub_coords_dir / f"features_uni_v1_{method}"
         X, slide_ids = load_patch_features(features_dir)
         logger.info(f"[{method}] loaded {X.shape[0]} patches ({X.shape[1]}-d) from {len(set(slide_ids))} slides")
 
-        unknown = set(slide_ids) - set(batch_labels.index)
+        # ── has_finding utility probe (slide-mean pooled) ───────────────────────
+        X_mean, unique_slide_ids = pool_slide_mean_features(X, slide_ids)
+        unknown = set(unique_slide_ids) - set(finding_labels.index)
         if unknown:
-            raise ValueError(f"[{method}] {len(unknown)} slide_id(s) have no EXP_ID label, e.g. {sorted(unknown)[:5]}")
-        exp_ids = batch_labels.loc[slide_ids, "exp_id"].to_numpy()
+            raise ValueError(f"[{method}] {len(unknown)} slide_id(s) have no has_finding label, e.g. {sorted(unknown)[:5]}")
+        y_has_finding = finding_labels.loc[unique_slide_ids, "has_finding"].to_numpy()
 
-        eta_slide = compute_eta_squared(X, slide_ids)
-        eta_exp_id = compute_eta_squared(X, exp_ids)
-        logger.info(f"[{method}] eta_sq_mean: slide={eta_slide['eta_sq_mean']:.4f}, exp_id={eta_exp_id['eta_sq_mean']:.4f}")
+        finding_probe = compute_logreg_probe(X_mean, y_has_finding, n_splits=logreg_n_splits, random_state=seed)
+        logger.info(f"[{method}] has_finding probe: roc_auc={finding_probe['roc_auc']:.4f}, balanced_accuracy={finding_probe['balanced_accuracy']:.4f}")
 
-        method_result = {
+        # ── t-SNE visualization subsample (computed once, from the first method) ─
+        if viz_idx is None:
+            viz_idx = stratified_subsample_indices(slide_ids, n_viz_patches_per_slide, viz_seed)
+            viz_slide_ids = slide_ids[viz_idx]
+            logger.info(f"t-SNE visualization subsample: {len(viz_idx)} patches across {len(set(viz_slide_ids))} slides")
+
+        from sklearn.manifold import TSNE
+
+        embedding = TSNE(
+            n_components=2, perplexity=tsne_perplexity, random_state=seed, init="pca"
+        ).fit_transform(X[viz_idx])
+        tsne_embeddings[method] = embedding
+        logger.info(f"[{method}] t-SNE done: {embedding.shape}")
+
+        results[method] = {
             "n_patches": int(X.shape[0]),
-            "n_slides": int(len(set(slide_ids))),
-            "n_exp_ids": int(len(set(exp_ids))),
-            "eta_squared_slide": eta_slide,
-            "eta_squared_exp_id": eta_exp_id,
+            "n_slides": int(len(unique_slide_ids)),
+            "n_finding_positive_slides": int(y_has_finding.sum()),
+            "has_finding_probe": finding_probe,
         }
-
-        if compute_knn:
-            slide_idx = stratified_subsample_indices(slide_ids, knn_max_per_group, seed)
-            knn_slide = compute_knn_accuracy(
-                X[slide_idx], slide_ids[slide_idx],
-                n_neighbors=knn_n_neighbors, n_splits=knn_n_splits, random_state=seed,
-            )
-            exp_id_idx = stratified_subsample_indices(exp_ids, knn_max_per_group, seed)
-            knn_exp_id = compute_knn_accuracy(
-                X[exp_id_idx], exp_ids[exp_id_idx],
-                n_neighbors=knn_n_neighbors, n_splits=knn_n_splits, random_state=seed,
-            )
-            logger.info(f"[{method}] knn_accuracy: slide={knn_slide:.4f} (n={len(slide_idx)}), exp_id={knn_exp_id:.4f} (n={len(exp_id_idx)})")
-            method_result["knn_accuracy_slide"] = knn_slide
-            method_result["knn_accuracy_exp_id"] = knn_exp_id
-
-        results[method] = method_result
 
     # ── Comparison table ─────────────────────────────────────────────────────
-    table_rows = []
-    for method in METHODS:
-        r = results[method]
-        row = {
-            "method": method,
-            "eta_sq_mean_slide": r["eta_squared_slide"]["eta_sq_mean"],
-            "eta_sq_mean_exp_id": r["eta_squared_exp_id"]["eta_sq_mean"],
-        }
-        if compute_knn:
-            row["knn_accuracy_slide"] = r["knn_accuracy_slide"]
-            row["knn_accuracy_exp_id"] = r["knn_accuracy_exp_id"]
-        table_rows.append(row)
-    comparison_df = pd.DataFrame(table_rows).set_index("method")
+    comparison_df = pd.DataFrame(
+        [
+            {
+                "method": method,
+                "roc_auc_has_finding": results[method]["has_finding_probe"]["roc_auc"],
+                "balanced_accuracy_has_finding": results[method]["has_finding_probe"]["balanced_accuracy"],
+            }
+            for method in METHODS
+        ]
+    ).set_index("method")
     comparison_df.to_csv(run_dir / "comparison_table.csv")
     logger.info("Comparison table:\n" + comparison_df.to_string())
 
-    # ── Bar chart: eta_sq_mean by method, one bar group per grouping ───────────
+    # ── t-SNE scatter grid, colored by slide (no legend -- 998 slides is too many
+    # to read off individually; the point is whether per-slide clumps merge) ───
     import matplotlib
 
     matplotlib.use("Agg")
     import matplotlib.pyplot as plt
 
-    fig, ax = plt.subplots(figsize=(7, 4.5))
-    x = np.arange(len(METHODS))
-    width = 0.35
-    ax.bar(x - width / 2, comparison_df["eta_sq_mean_slide"], width, label="slide_id (スライド間差)")
-    ax.bar(x + width / 2, comparison_df["eta_sq_mean_exp_id"], width, label="exp_id (施設間差)")
-    ax.set_xticks(x)
-    ax.set_xticklabels(METHODS)
-    ax.set_ylabel("eta_sq_mean (lower = less batch effect)")
-    ax.set_title("Batch effect (eta-squared) by stain normalization method")
-    ax.legend()
+    slide_codes = pd.factorize(viz_slide_ids)[0]
+    cmap = plt.get_cmap("tab20")
+    colors = cmap(slide_codes % 20)
+
+    fig, axes = plt.subplots(2, 2, figsize=(11, 11))
+    for ax, method in zip(axes.flat, METHODS):
+        emb = tsne_embeddings[method]
+        ax.scatter(emb[:, 0], emb[:, 1], c=colors, s=4, alpha=0.6, linewidths=0)
+        ax.set_title(method)
+        ax.set_xticks([])
+        ax.set_yticks([])
+    fig.suptitle("t-SNE of UNI patch features, colored by slide (each slide = one color, repeating every 20)")
     fig.tight_layout()
-    fig.savefig(run_dir / "eta_squared_comparison.png", dpi=150)
+    fig.savefig(run_dir / "tsne_by_slide.png", dpi=150)
     plt.close(fig)
 
     # ── Save results ──────────────────────────────────────────────────────────
     (run_dir / "results.json").write_text(json.dumps(results, indent=2, ensure_ascii=False))
+    np.savez(
+        run_dir / "tsne_embeddings.npz",
+        viz_slide_ids=viz_slide_ids,
+        **{f"embedding_{method}": tsne_embeddings[method] for method in METHODS},
+    )
 
     complete_run(run_dir)
     logger.info("Done.")
